@@ -3,37 +3,49 @@ import {
     getTasks,
     createTask,
     updateTask,
-    deleteTask
+    deleteTask,
+    loginUser,
+    registerUser,
+    getMe,
+    logoutUser,
+    getToken
 } from "./api";
-
 import "./App.css";
 
 function App() {
-    const [tasks, setTasks] = useState([]);
+    // Auth state
+    const [user, setUser] = useState(() => {
+        const saved = localStorage.getItem("user");
+        return saved ? JSON.parse(saved) : null;
+    });
+    const [token, setAuthToken] = useState(getToken());
+    const [authMode, setAuthMode] = useState("login"); // "login" or "register"
+    const [authForm, setAuthForm] = useState({
+        name: "",
+        email: "",
+        password: ""
+    });
+    const [authLoading, setAuthLoading] = useState(false);
+    const [authError, setAuthError] = useState("");
 
-    // Loading states
-    const [loading, setLoading] = useState(true);
+    // Task state
+    const [tasks, setTasks] = useState([]);
+    const [loading, setLoading] = useState(false);
     const [creating, setCreating] = useState(false);
     const [updatingId, setUpdatingId] = useState(null);
     const [deletingId, setDeletingId] = useState(null);
 
-    // Error state
-    const [error, setError] = useState("");
-
     // Toast state
-    const [toast, setToast] = useState({
-        message: "",
-        type: ""
-    });
+    const [toast, setToast] = useState({ message: "", type: "" });
 
-    // Form state
+    // Task Form state
     const [form, setForm] = useState({
         title: "",
         description: "",
         priority: "medium"
     });
 
-    // Edit state
+    // Edit Form state
     const [editingId, setEditingId] = useState(null);
     const [editForm, setEditForm] = useState({
         title: "",
@@ -42,116 +54,149 @@ function App() {
         completed: false
     });
 
-    // Show toast
-    const showToast = (message, type = "success") => {
-        setToast({
-            message,
-            type
-        });
+    // Filter state
+    const [filterPriority, setFilterPriority] = useState("all");
+    const [searchTerm, setSearchTerm] = useState("");
 
+    // Show toast message
+    const showToast = (message, type = "success") => {
+        setToast({ message, type });
         setTimeout(() => {
-            setToast({
-                message: "",
-                type: ""
-            });
-        }, 3000);
+            setToast({ message: "", type: "" });
+        }, 3500);
     };
 
-    // Fetch tasks when page loads
+    // Listen for unauthorized 401 events to trigger logout
     useEffect(() => {
-        fetchTasks();
+        const handleUnauthorized = () => {
+            setUser(null);
+            setAuthToken(null);
+            showToast("Session expired. Please log in again.", "error");
+        };
+
+        window.addEventListener("auth:unauthorized", handleUnauthorized);
+        return () => window.removeEventListener("auth:unauthorized", handleUnauthorized);
     }, []);
+
+    // Initial check on mount: verify /me if token exists
+    useEffect(() => {
+        if (token) {
+            getMe()
+                .then((res) => {
+                    setUser(res.user);
+                    fetchTasks();
+                })
+                .catch(() => {
+                    setUser(null);
+                    setAuthToken(null);
+                });
+        }
+    }, [token]);
 
     const fetchTasks = async () => {
         try {
             setLoading(true);
-            setError("");
-
             const data = await getTasks();
-
-            setTasks(data);
+            setTasks(Array.isArray(data) ? data : []);
         } catch (err) {
-            setError(err.message);
             showToast(err.message, "error");
         } finally {
             setLoading(false);
         }
     };
 
-    // Handle form input
-    const handleChange = (e) => {
-        const { name, value } = e.target;
+    /* ================= AUTH HANDLERS ================= */
 
-        setForm({
-            ...form,
-            [name]: value
+    const handleAuthChange = (e) => {
+        setAuthForm({
+            ...authForm,
+            [e.target.name]: e.target.value
         });
+        setAuthError("");
     };
 
-    // CREATE TASK
-    const handleCreate = async (e) => {
+    const handleAuthSubmit = async (e) => {
         e.preventDefault();
+        setAuthLoading(true);
+        setAuthError("");
 
+        try {
+            if (authMode === "register") {
+                if (!authForm.name.trim() || authForm.name.trim().length < 2) {
+                    throw new Error("Name must be at least 2 characters long");
+                }
+                if (!authForm.email.includes("@")) {
+                    throw new Error("Please enter a valid email address");
+                }
+                if (authForm.password.length < 6) {
+                    throw new Error("Password must be at least 6 characters long");
+                }
+
+                const data = await registerUser(authForm.name, authForm.email, authForm.password);
+                setUser(data.user);
+                setAuthToken(data.token);
+                showToast(`Welcome, ${data.user.name}! Account registered.`);
+            } else {
+                if (!authForm.email || !authForm.password) {
+                    throw new Error("Email and password are required");
+                }
+
+                const data = await loginUser(authForm.email, authForm.password);
+                setUser(data.user);
+                setAuthToken(data.token);
+                showToast(`Welcome back, ${data.user.name}!`);
+            }
+            setAuthForm({ name: "", email: "", password: "" });
+        } catch (err) {
+            setAuthError(err.message);
+            showToast(err.message, "error");
+        } finally {
+            setAuthLoading(false);
+        }
+    };
+
+    const handleLogout = () => {
+        logoutUser();
+        setUser(null);
+        setAuthToken(null);
+        setTasks([]);
+        showToast("Logged out successfully");
+    };
+
+    /* ================= TASK HANDLERS ================= */
+
+    const handleTaskChange = (e) => {
+        const { name, value } = e.target;
+        setForm({ ...form, [name]: value });
+    };
+
+    const handleCreateTask = async (e) => {
+        e.preventDefault();
         if (!form.title.trim() || !form.description.trim()) {
             showToast("Title and description are required", "error");
             return;
         }
 
-        const temporaryTask = {
-            _id: `temp-${Date.now()}`,
-            title: form.title,
-            description: form.description,
-            priority: form.priority,
-            completed: false
-        };
-
         try {
             setCreating(true);
-            setError("");
-
-            // Optimistic UI
-            setTasks((previousTasks) => [
-                temporaryTask,
-                ...previousTasks
-            ]);
-
-            const newTask = await createTask(form);
-
-            // Replace temporary task with MongoDB task
-            setTasks((previousTasks) =>
-                previousTasks.map((task) =>
-                    task._id === temporaryTask._id
-                        ? newTask
-                        : task
-                )
-            );
-
-            setForm({
-                title: "",
-                description: "",
-                priority: "medium"
+            const newTask = await createTask({
+                title: form.title.trim(),
+                description: form.description.trim(),
+                priority: form.priority
             });
 
+            setTasks([newTask, ...tasks]);
+            setForm({ title: "", description: "", priority: "medium" });
             showToast("Task created successfully!");
         } catch (err) {
-            // Remove temporary task if API fails
-            setTasks((previousTasks) =>
-                previousTasks.filter(
-                    (task) => task._id !== temporaryTask._id
-                )
-            );
-
-            setError(err.message);
             showToast(err.message, "error");
         } finally {
             setCreating(false);
         }
     };
 
-    // Start editing
-    const startEdit = (task) => {
+    const handleStartEdit = (task) => {
         setEditingId(task._id);
-
         setEditForm({
             title: task.title,
             description: task.description,
@@ -160,343 +205,429 @@ function App() {
         });
     };
 
-    // Cancel editing
-    const cancelEdit = () => {
+    const handleCancelEdit = () => {
         setEditingId(null);
     };
 
-    // Handle edit input
-    const handleEditChange = (e) => {
-        const { name, value, type, checked } = e.target;
-
-        setEditForm({
-            ...editForm,
-            [name]: type === "checkbox" ? checked : value
-        });
-    };
-
-    // UPDATE TASK
-    const handleUpdate = async (id) => {
-        if (
-            !editForm.title.trim() ||
-            !editForm.description.trim()
-        ) {
-            showToast("Title and description are required", "error");
+    const handleSaveEdit = async (id) => {
+        if (!editForm.title.trim() || !editForm.description.trim()) {
+            showToast("Title and description cannot be empty", "error");
             return;
         }
 
         try {
             setUpdatingId(id);
-            setError("");
-
-            const updatedTask = await updateTask(id, editForm);
-
-            setTasks((previousTasks) =>
-                previousTasks.map((task) =>
-                    task._id === id ? updatedTask : task
-                )
-            );
-
+            const updated = await updateTask(id, editForm);
+            setTasks(tasks.map((t) => (t._id === id ? updated : t)));
             setEditingId(null);
-
             showToast("Task updated successfully!");
         } catch (err) {
-            setError(err.message);
             showToast(err.message, "error");
         } finally {
             setUpdatingId(null);
         }
     };
 
-    // DELETE TASK
-    const handleDelete = async (id) => {
-        const confirmed = window.confirm(
-            "Are you sure you want to delete this task?"
-        );
-
-        if (!confirmed) {
-            return;
+    const handleToggleComplete = async (task) => {
+        try {
+            setUpdatingId(task._id);
+            const updated = await updateTask(task._id, {
+                completed: !task.completed
+            });
+            setTasks(tasks.map((t) => (t._id === task._id ? updated : t)));
+            showToast(
+                `Task marked as ${updated.completed ? "completed" : "pending"}`
+            );
+        } catch (err) {
+            showToast(err.message, "error");
+        } finally {
+            setUpdatingId(null);
         }
+    };
+
+    const handleDeleteTask = async (id) => {
+        if (!window.confirm("Are you sure you want to delete this task?")) return;
 
         try {
             setDeletingId(id);
-            setError("");
-
             await deleteTask(id);
-
-            setTasks((previousTasks) =>
-                previousTasks.filter((task) => task._id !== id)
-            );
-
-            showToast("Task deleted successfully!");
+            setTasks(tasks.filter((t) => t._id !== id));
+            showToast("Task deleted successfully");
         } catch (err) {
-            setError(err.message);
             showToast(err.message, "error");
         } finally {
             setDeletingId(null);
         }
     };
 
+    // Filter tasks
+    const filteredTasks = tasks.filter((t) => {
+        const matchesPriority =
+            filterPriority === "all" || t.priority === filterPriority;
+        const matchesSearch =
+            t.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            t.description.toLowerCase().includes(searchTerm.toLowerCase());
+        return matchesPriority && matchesSearch;
+    });
+
     return (
         <div className="app">
-            {/* Toast */}
+            {/* TOAST NOTIFICATION */}
             {toast.message && (
                 <div className={`toast ${toast.type}`}>
+                    {toast.type === "success" ? "✓ " : "⚠ "}
                     {toast.message}
                 </div>
             )}
 
+            {/* HEADER */}
             <header className="header">
-                <h1>Task Manager</h1>
-                <p>React + Express + MongoDB</p>
-            </header>
-
-            <main className="container">
-
-                {/* CREATE TASK */}
-                <section className="card">
-                    <h2>Create New Task</h2>
-
-                    <form onSubmit={handleCreate}>
-
-                        <div className="form-group">
-                            <label>Title</label>
-
-                            <input
-                                type="text"
-                                name="title"
-                                value={form.title}
-                                onChange={handleChange}
-                                placeholder="Enter task title"
-                            />
-                        </div>
-
-                        <div className="form-group">
-                            <label>Description</label>
-
-                            <textarea
-                                name="description"
-                                value={form.description}
-                                onChange={handleChange}
-                                placeholder="Enter task description"
-                                rows="4"
-                            />
-                        </div>
-
-                        <div className="form-group">
-                            <label>Priority</label>
-
-                            <select
-                                name="priority"
-                                value={form.priority}
-                                onChange={handleChange}
-                            >
-                                <option value="low">Low</option>
-                                <option value="medium">Medium</option>
-                                <option value="high">High</option>
-                            </select>
-                        </div>
-
-                        <button
-                            type="submit"
-                            className="btn primary"
-                            disabled={creating}
-                        >
-                            {creating ? "Creating..." : "Add Task"}
-                        </button>
-
-                    </form>
-                </section>
-
-                {/* ERROR */}
-                {error && (
-                    <div className="error-box">
-                        {error}
-                    </div>
-                )}
-
-                {/* TASK LIST */}
-                <section>
-                    <div className="section-title">
-                        <h2>Tasks</h2>
-
-                        <button
-                            className="btn secondary"
-                            onClick={fetchTasks}
-                            disabled={loading}
-                        >
-                            {loading ? "Loading..." : "Refresh"}
-                        </button>
+                <div className="header-container">
+                    <div>
+                        <h1>Task Management System</h1>
+                        <p className="subtitle">
+                            Practical 7: JWT Authentication & Middleware Pipeline
+                        </p>
                     </div>
 
-                    {loading ? (
-                        <div className="loading">
-                            Loading tasks...
-                        </div>
-                    ) : tasks.length === 0 ? (
-                        <div className="empty">
-                            No tasks found. Create your first task!
-                        </div>
-                    ) : (
-                        <div className="task-list">
-
-                            {tasks.map((task) => (
-
-                                <div
-                                    className="task-card"
-                                    key={task._id}
-                                >
-
-                                    {editingId === task._id ? (
-
-                                        /* EDIT FORM */
-
-                                        <div>
-
-                                            <input
-                                                type="text"
-                                                name="title"
-                                                value={editForm.title}
-                                                onChange={handleEditChange}
-                                            />
-
-                                            <textarea
-                                                name="description"
-                                                value={editForm.description}
-                                                onChange={handleEditChange}
-                                                rows="3"
-                                            />
-
-                                            <select
-                                                name="priority"
-                                                value={editForm.priority}
-                                                onChange={handleEditChange}
-                                            >
-                                                <option value="low">
-                                                    Low
-                                                </option>
-
-                                                <option value="medium">
-                                                    Medium
-                                                </option>
-
-                                                <option value="high">
-                                                    High
-                                                </option>
-                                            </select>
-
-                                            <label className="checkbox">
-                                                <input
-                                                    type="checkbox"
-                                                    name="completed"
-                                                    checked={editForm.completed}
-                                                    onChange={handleEditChange}
-                                                />
-
-                                                Completed
-                                            </label>
-
-                                            <div className="actions">
-
-                                                <button
-                                                    className="btn primary"
-                                                    onClick={() =>
-                                                        handleUpdate(task._id)
-                                                    }
-                                                    disabled={
-                                                        updatingId === task._id
-                                                    }
-                                                >
-                                                    {updatingId === task._id
-                                                        ? "Updating..."
-                                                        : "Save"}
-                                                </button>
-
-                                                <button
-                                                    className="btn secondary"
-                                                    onClick={cancelEdit}
-                                                >
-                                                    Cancel
-                                                </button>
-
-                                            </div>
-
-                                        </div>
-
-                                    ) : (
-
-                                        /* TASK DISPLAY */
-
-                                        <div>
-
-                                            <div className="task-header">
-
-                                                <h3>
-                                                    {task.title}
-                                                </h3>
-
-                                                <span
-                                                    className={`priority ${task.priority}`}
-                                                >
-                                                    {task.priority}
-                                                </span>
-
-                                            </div>
-
-                                            <p>
-                                                {task.description}
-                                            </p>
-
-                                            <div className="task-info">
-
-                                                <span>
-                                                    Status:{" "}
-                                                    {task.completed
-                                                        ? "Completed"
-                                                        : "Pending"}
-                                                </span>
-
-                                            </div>
-
-                                            <div className="actions">
-
-                                                <button
-                                                    className="btn secondary"
-                                                    onClick={() =>
-                                                        startEdit(task)
-                                                    }
-                                                >
-                                                    Edit
-                                                </button>
-
-                                                <button
-                                                    className="btn danger"
-                                                    onClick={() =>
-                                                        handleDelete(task._id)
-                                                    }
-                                                    disabled={
-                                                        deletingId === task._id
-                                                    }
-                                                >
-                                                    {deletingId === task._id
-                                                        ? "Deleting..."
-                                                        : "Delete"}
-                                                </button>
-
-                                            </div>
-
-                                        </div>
-                                    )}
-
+                    {user && (
+                        <div className="user-profile-bar">
+                            <div className="user-badge">
+                                <span className="user-avatar">
+                                    {user.name ? user.name[0].toUpperCase() : "U"}
+                                </span>
+                                <div className="user-info-text">
+                                    <strong>{user.name}</strong>
+                                    <small>{user.email}</small>
                                 </div>
-
-                            ))}
-
+                            </div>
+                            <button className="btn logout-btn" onClick={handleLogout}>
+                                Logout
+                            </button>
                         </div>
                     )}
+                </div>
+            </header>
 
-                </section>
+            {/* MAIN CONTENT AREA */}
+            <main className="container">
+                {!user ? (
+                    /* AUTHENTICATION VIEW */
+                    <div className="auth-card">
+                        <div className="auth-tabs">
+                            <button
+                                className={`auth-tab ${authMode === "login" ? "active" : ""}`}
+                                onClick={() => {
+                                    setAuthMode("login");
+                                    setAuthError("");
+                                }}
+                            >
+                                Login
+                            </button>
+                            <button
+                                className={`auth-tab ${authMode === "register" ? "active" : ""}`}
+                                onClick={() => {
+                                    setAuthMode("register");
+                                    setAuthError("");
+                                }}
+                            >
+                                Register
+                            </button>
+                        </div>
 
+                        <h2>
+                            {authMode === "login"
+                                ? "Sign in with JWT"
+                                : "Create a Secure Account"}
+                        </h2>
+                        <p className="auth-desc">
+                            {authMode === "login"
+                                ? "Enter your credentials to receive a signed JWT token."
+                                : "Passwords are automatically hashed with bcrypt before saving."}
+                        </p>
+
+                        {authError && <div className="error-box">{authError}</div>}
+
+                        <form onSubmit={handleAuthSubmit} className="auth-form">
+                            {authMode === "register" && (
+                                <div className="form-group">
+                                    <label htmlFor="auth-name">Full Name</label>
+                                    <input
+                                        id="auth-name"
+                                        type="text"
+                                        name="name"
+                                        placeholder="e.g. Alex Johnson"
+                                        value={authForm.name}
+                                        onChange={handleAuthChange}
+                                        required
+                                    />
+                                </div>
+                            )}
+
+                            <div className="form-group">
+                                <label htmlFor="auth-email">Email Address</label>
+                                <input
+                                    id="auth-email"
+                                    type="email"
+                                    name="email"
+                                    placeholder="e.g. alex@example.com"
+                                    value={authForm.email}
+                                    onChange={handleAuthChange}
+                                    required
+                                />
+                            </div>
+
+                            <div className="form-group">
+                                <label htmlFor="auth-password">Password</label>
+                                <input
+                                    id="auth-password"
+                                    type="password"
+                                    name="password"
+                                    placeholder="Minimum 6 characters"
+                                    value={authForm.password}
+                                    onChange={handleAuthChange}
+                                    required
+                                />
+                            </div>
+
+                            <button
+                                type="submit"
+                                className="btn primary submit-btn"
+                                disabled={authLoading}
+                            >
+                                {authLoading
+                                    ? "Authenticating..."
+                                    : authMode === "login"
+                                    ? "Login to Dashboard"
+                                    : "Register & Generate Token"}
+                            </button>
+                        </form>
+                    </div>
+                ) : (
+                    /* PROTECTED TASK DASHBOARD */
+                    <div className="dashboard-grid">
+                        {/* CREATE TASK CARD */}
+                        <div className="card create-card">
+                            <h2>+ Create New Task</h2>
+                            <form onSubmit={handleCreateTask}>
+                                <div className="form-group">
+                                    <label htmlFor="task-title">Title</label>
+                                    <input
+                                        id="task-title"
+                                        type="text"
+                                        name="title"
+                                        placeholder="e.g. Implement Auth Middleware"
+                                        value={form.title}
+                                        onChange={handleTaskChange}
+                                        required
+                                    />
+                                </div>
+
+                                <div className="form-group">
+                                    <label htmlFor="task-desc">Description</label>
+                                    <textarea
+                                        id="task-desc"
+                                        name="description"
+                                        rows="3"
+                                        placeholder="Detailed task description..."
+                                        value={form.description}
+                                        onChange={handleTaskChange}
+                                        required
+                                    />
+                                </div>
+
+                                <div className="form-group">
+                                    <label htmlFor="task-priority">Priority</label>
+                                    <select
+                                        id="task-priority"
+                                        name="priority"
+                                        value={form.priority}
+                                        onChange={handleTaskChange}
+                                    >
+                                        <option value="low">Low Priority</option>
+                                        <option value="medium">Medium Priority</option>
+                                        <option value="high">High Priority</option>
+                                    </select>
+                                </div>
+
+                                <button
+                                    type="submit"
+                                    className="btn primary"
+                                    disabled={creating}
+                                >
+                                    {creating ? "Saving Task..." : "Add Task"}
+                                </button>
+                            </form>
+                        </div>
+
+                        {/* TASK LIST & CONTROLS */}
+                        <div className="tasks-section">
+                            <div className="filter-bar card">
+                                <input
+                                    type="text"
+                                    placeholder="Search tasks..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    className="search-input"
+                                />
+
+                                <select
+                                    value={filterPriority}
+                                    onChange={(e) => setFilterPriority(e.target.value)}
+                                    className="filter-select"
+                                >
+                                    <option value="all">All Priorities</option>
+                                    <option value="low">Low Priority</option>
+                                    <option value="medium">Medium Priority</option>
+                                    <option value="high">High Priority</option>
+                                </select>
+
+                                <button
+                                    className="btn secondary refresh-btn"
+                                    onClick={fetchTasks}
+                                    disabled={loading}
+                                >
+                                    {loading ? "Refreshing..." : "↻ Refresh"}
+                                </button>
+                            </div>
+
+                            <div className="section-title">
+                                <h2>Your Tasks ({filteredTasks.length})</h2>
+                            </div>
+
+                            {loading ? (
+                                <div className="loading card">Loading tasks securely...</div>
+                            ) : filteredTasks.length === 0 ? (
+                                <div className="empty card">
+                                    <h3>No tasks found</h3>
+                                    <p>Create your first task using the form above.</p>
+                                </div>
+                            ) : (
+                                filteredTasks.map((task) => (
+                                    <div
+                                        key={task._id}
+                                        className={`task-card ${
+                                            task.completed ? "task-completed" : ""
+                                        }`}
+                                    >
+                                        {editingId === task._id ? (
+                                            /* EDIT TASK MODE */
+                                            <div className="edit-form">
+                                                <input
+                                                    type="text"
+                                                    value={editForm.title}
+                                                    onChange={(e) =>
+                                                        setEditForm({
+                                                            ...editForm,
+                                                            title: e.target.value
+                                                        })
+                                                    }
+                                                />
+                                                <textarea
+                                                    rows="3"
+                                                    value={editForm.description}
+                                                    onChange={(e) =>
+                                                        setEditForm({
+                                                            ...editForm,
+                                                            description: e.target.value
+                                                        })
+                                                    }
+                                                />
+                                                <select
+                                                    value={editForm.priority}
+                                                    onChange={(e) =>
+                                                        setEditForm({
+                                                            ...editForm,
+                                                            priority: e.target.value
+                                                        })
+                                                    }
+                                                >
+                                                    <option value="low">Low</option>
+                                                    <option value="medium">Medium</option>
+                                                    <option value="high">High</option>
+                                                </select>
+                                                <div className="actions">
+                                                    <button
+                                                        className="btn primary"
+                                                        onClick={() => handleSaveEdit(task._id)}
+                                                        disabled={updatingId === task._id}
+                                                    >
+                                                        {updatingId === task._id ? "Saving..." : "Save"}
+                                                    </button>
+                                                    <button
+                                                        className="btn secondary"
+                                                        onClick={handleCancelEdit}
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            /* VIEW TASK MODE */
+                                            <div>
+                                                <div className="task-header">
+                                                    <h3
+                                                        style={{
+                                                            textDecoration: task.completed
+                                                                ? "line-through"
+                                                                : "none",
+                                                            color: task.completed
+                                                                ? "#9ca3af"
+                                                                : "#111827"
+                                                        }}
+                                                    >
+                                                        {task.title}
+                                                    </h3>
+                                                    <span className={`priority ${task.priority}`}>
+                                                        {task.priority}
+                                                    </span>
+                                                </div>
+
+                                                <p className="task-description">
+                                                    {task.description}
+                                                </p>
+
+                                                <div className="task-footer">
+                                                    <label className="checkbox">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={Boolean(task.completed)}
+                                                            onChange={() => handleToggleComplete(task)}
+                                                            disabled={updatingId === task._id}
+                                                        />
+                                                        <span>
+                                                            {task.completed
+                                                                ? "Completed"
+                                                                : "Mark as Completed"}
+                                                        </span>
+                                                    </label>
+
+                                                    <div className="actions">
+                                                        <button
+                                                            className="btn secondary edit-btn"
+                                                            onClick={() => handleStartEdit(task)}
+                                                        >
+                                                            Edit
+                                                        </button>
+                                                        <button
+                                                            className="btn danger"
+                                                            onClick={() => handleDeleteTask(task._id)}
+                                                            disabled={deletingId === task._id}
+                                                        >
+                                                            {deletingId === task._id
+                                                                ? "Deleting..."
+                                                                : "Delete"}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                )}
             </main>
         </div>
     );
