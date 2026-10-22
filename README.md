@@ -1,16 +1,55 @@
-# React + Vite
+# Task Management System — React Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A modern React (Vite) single-page application for the Task Management System with JWT authentication, real-time cache analytics, background event visualization, and full containerization via Docker.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Practical 11: Containerization with Docker
 
-## React Compiler
+This frontend is containerized using Docker and ready for orchestration via Docker Compose.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Dockerfile Highlights
+- **Base Image**: `node:18` (matches lab environment)
+- **Layer Caching**: `package*.json` copied and installed prior to copying source files
+- **Build Step**: Executes `npm run build` to generate optimized production assets in `dist/`
+- **Serve Step**: Runs `npm run preview -- --host` on port `5173`
+- **Multi-Stage Option**: Also provides [`Dockerfile.multistage`](./Dockerfile.multistage) utilizing `nginx:alpine` to reduce image size from ~1.1GB to ~25MB.
 
-## Expanding the Oxlint configuration
+### Build and Run with Docker Locally
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+```bash
+# Build the Docker image
+docker build -t task-manager-frontend .
+
+# Run the container mapping host port 5173 to container port 5173
+docker run -d -p 5173:5173 --name task-frontend task-manager-frontend
+
+# Access in browser
+http://localhost:5173
+```
+
+### Full-Stack Orchestration
+
+To run the entire full stack (Frontend + Express Backend + MongoDB), run:
+
+```bash
+# From workspace / parent root
+docker-compose up --build
+```
+
+---
+
+## Project Structure
+
+```
+task-manager-frontend/
+├── Dockerfile              # Dockerfile using node:18 + vite preview (port 5173)
+├── Dockerfile.multistage   # Multi-stage production build using nginx:alpine
+├── .dockerignore           # Excludes node_modules, dist, and local environment files
+├── vite.config.js          # Configured with host: '0.0.0.0' and port: 5173
+├── src/
+│   ├── api.js              # REST API client with VITE_API_URL fallback
+│   ├── App.jsx             # Main application UI and state management
+│   └── main.jsx            # React root entrypoint
+└── package.json
+```

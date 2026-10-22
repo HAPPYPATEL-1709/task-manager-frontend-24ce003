@@ -1,0 +1,18 @@
+# ====================================================================
+# Practical 11 (Supplementary): Multi-Stage Production Build (Nginx)
+# Reduces image size from ~1.1GB (Node base) to ~25MB (Alpine Nginx)
+# ====================================================================
+
+# Stage 1: Build the React Application
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+# Stage 2: Serve static production assets with Nginx
+FROM nginx:alpine AS runner
+COPY --from=builder /app/dist /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
